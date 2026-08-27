@@ -83,6 +83,7 @@ tasks:
     desc: 動作中のデバイスを 1200bps タッチで BOOTSEL モードに戻す
     vars:
       PORT: '{{.PORT | default "/dev/ttyACM0"}}'
+      BOOTSEL_TIMEOUT: '{{.BOOTSEL_TIMEOUT | default 30}}'
     cmds:
       - |
         if [ ! -e "{{.PORT}}" ]; then
@@ -92,7 +93,17 @@ tasks:
         fi
         # TinyGo の USB CDC は 1200bps かつ DTR 断で EnterBootloader() を呼ぶ
         stty -F "{{.PORT}}" 1200 hupcl
-        echo "BOOTSEL モードへ再起動を要求しました。"
+        echo "BOOTSEL モードへ再起動を要求しました。認識を待ちます..."
+        # WSL2 では usbipd の再アタッチを挟むため 10 秒程度かかる
+        for i in $(seq 1 {{.BOOTSEL_TIMEOUT}}); do
+          if picotool info >/dev/null 2>&1; then
+            echo "BOOTSEL モードを認識しました (${i}秒)。"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "{{.BOOTSEL_TIMEOUT}} 秒待っても BOOTSEL を認識できませんでした。" >&2
+        exit 1
 
   targets:
     desc: TinyGo が対応するターゲット一覧を表示する
