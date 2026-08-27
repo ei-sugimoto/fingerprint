@@ -1,0 +1,131 @@
+version: "3"
+
+vars:
+  TINYGO_IMAGE: '{{.TINYGO_IMAGE | default "tinygo/tinygo:0.41.1"}}'
+  TARGET: '{{.TARGET | default "pico2"}}'
+  # docker: コンテナ内の TinyGo を使う / local: mise で入れた TinyGo を使う
+  BUILDER: '{{.BUILDER | default "docker"}}'
+  BUILD_DIR: build
+  CACHE_DIR: .cache
+  OUT: '{{.BUILD_DIR | default "build"}}/firmware.uf2'
+  DOCKER_RUN: >-
+    docker run --rm
+    --user $(id -u):$(id -g)
+    -v {{.ROOT_DIR}}:/src -w /src
+    -v {{.ROOT_DIR}}/.cache/go-build:/cache/go-build
+    -v {{.ROOT_DIR}}/.cache/gomod:/cache/gomod
+    -e GOCACHE=/cache/go-build
+    -e GOMODCACHE=/cache/gomod
+    -e GOFLAGS=-buildvcs=false
+    {{.TINYGO_IMAGE}}
+
+tasks:
+  default:
+    desc: タスク一覧を表示する
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: mise でツールを導入し、.envrc.example から .envrc を作成する
+    cmds:
+      - mise install
+      - task: envrc
+      - cmd: direnv allow .
+        ignore_error: true
+      - cmd: echo "セットアップ完了。direnv が未導入の場合は 'direnv allow .' を手動で実行してください。"
+        silent: true
+
+  envrc:
+    internal: true
+    cmds:
+      - cp .envrc.example .envrc
+    status:
+      - test -f .envrc
+
+  dirs:
+    internal: true
+    cmds:
+      - mkdir -p {{.BUILD_DIR}} {{.CACHE_DIR}}/go-build {{.CACHE_DIR}}/gomod
+    status:
+      - test -d {{.BUILD_DIR}} && test -d {{.CACHE_DIR}}/go-build && test -d {{.CACHE_DIR}}/gomod
+
+  build:
+    desc: UF2 をビルドする
+    deps: [dirs]
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.OUT}}"
+    cmds:
+      - |
+        if [ "{{.BUILDER}}" = "docker" ]; then
+          {{.DOCKER_RUN}} tinygo build -target={{.TARGET}} -o {{.OUT}} ./
+        else
+          tinygo build -target={{.TARGET}} -o {{.OUT}} ./
+        fi
+      - ls -lh {{.OUT}}
+
+  flash:
+    desc: ビルドして picotool で書き込み、実行する（BOOTSEL モードで接続しておくこと）
+    deps: [build]
+    cmds:
+      - picotool load -x {{.OUT}}
+
+  info:
+    desc: 接続中のデバイス情報を表示する
+    cmds:
+      - picotool info -a
+
+  targets:
+    desc: TinyGo が対応するターゲット一覧を表示する
+    cmds:
+      - "{{.DOCKER_RUN}} tinygo targets"
+
+  test:
+    desc: TinyGo でテストを実行する
+    cmds:
+      - tinygo test ./...
+
+  lint:
+    desc: golangci-lint を実行する
+    cmds:
+      - |
+        info=$(tinygo info -target={{.TARGET}})
+        export GOROOT=$(echo "$info" | awk '/cached GOROOT/{print $3}')
+        export GOOS=$(echo "$info" | awk '/^GOOS:/{print $2}')
+        export GOARCH=$(echo "$info" | awk '/^GOARCH:/{print $2}')
+        export GOFLAGS="-tags=$(echo "$info" | sed -n 's/^build tags: *//p' | tr ' ' ',')"
+        golangci-lint run ./...
+
+  fmt:
+    desc: golangci-lint formatters でコードを整形する
+    cmds:
+      - |
+        info=$(tinygo info -target={{.TARGET}})
+        export GOROOT=$(echo "$info" | awk '/cached GOROOT/{print $3}')
+        export GOOS=$(echo "$info" | awk '/^GOOS:/{print $2}')
+        export GOARCH=$(echo "$info" | awk '/^GOARCH:/{print $2}')
+        export GOFLAGS="-tags=$(echo "$info" | sed -n 's/^build tags: *//p' | tr ' ' ',')"
+        golangci-lint fmt ./...
+
+  shell:
+    desc: コンテナ内のシェルに入る
+    deps: [dirs]
+    interactive: true
+    cmds:
+      - >-
+        docker run --rm -it
+        --user $(id -u):$(id -g)
+        -v {{.ROOT_DIR}}:/src -w /src
+        -v {{.ROOT_DIR}}/.cache/go-build:/cache/go-build
+        -v {{.ROOT_DIR}}/.cache/gomod:/cache/gomod
+        -e GOCACHE=/cache/go-build -e GOMODCACHE=/cache/gomod
+        {{.TINYGO_IMAGE}} bash
+
+  clean:
+    desc: build/ と .cache/ を削除する
+    cmds:
+      - rm -rf {{.BUILD_DIR}} {{.CACHE_DIR}}

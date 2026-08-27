@@ -1,0 +1,28 @@
+version: "2"
+
+# TinyGo の GOROOT 配下では gc が //go:inline を拒否するため、
+# エクスポートデータのコンパイルを伴う型情報ベースの linter
+# (govet / staticcheck / errcheck / unused) は使えない。
+# ここでは構文レベルで完結する linter のみを有効にしている。
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - copyloopvar
+    - dupword
+    - gocheckcompilerdirectives
+    - ineffassign
+    - misspell
+    - nakedret
+    - nolintlint
+    - predeclared
+    - usestdlibvars
+    - whitespace
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

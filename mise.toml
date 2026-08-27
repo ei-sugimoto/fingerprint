@@ -1,0 +1,5 @@
+[tools]
+go = "1.26.4"
+task = "latest"
+tinygo = "0.41.1"
+golangci-lint = "2.13.1"

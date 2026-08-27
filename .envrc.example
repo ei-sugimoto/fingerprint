@@ -1,0 +1,26 @@
+# shellcheck shell=bash
+#
+# direnv 用テンプレート。`task setup` で .envrc としてコピーされる。
+# .envrc は gitignore 済みなので、環境ごとの調整はそちらで行う。
+
+# mise 管理のツール (go / tinygo / task / golangci-lint) を PATH に載せる
+eval "$(mise env -s bash)"
+
+export TINYGO_TARGET="${TINYGO_TARGET:-pico2}"
+
+# 型情報を要する linter をポータブルなコードに掛けたいとき用に、
+# 標準 Go の GOROOT を退避しておく
+GOROOT_STD="$(go env GOROOT)"
+export GOROOT_STD
+
+# TinyGo が合成する GOROOT を使う。machine など TinyGo 固有パッケージを
+# gopls / golangci-lint が解決できるようになる。
+_info="$(tinygo info -target="$TINYGO_TARGET")"
+GOROOT="$(printf '%s\n' "$_info" | awk '/cached GOROOT/{print $3}')"
+GOOS="$(printf '%s\n' "$_info" | awk '/^GOOS:/{print $2}')"
+GOARCH="$(printf '%s\n' "$_info" | awk '/^GOARCH:/{print $2}')"
+GOFLAGS="-tags=$(printf '%s\n' "$_info" | sed -n 's/^build tags: *//p' | tr ' ' ',')"
+export GOROOT GOOS GOARCH GOFLAGS
+unset _info
+
+watch_file mise.toml
