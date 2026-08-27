@@ -79,6 +79,21 @@ tasks:
     cmds:
       - picotool info -a
 
+  bootsel:
+    desc: 動作中のデバイスを 1200bps タッチで BOOTSEL モードに戻す
+    vars:
+      PORT: '{{.PORT | default "/dev/ttyACM0"}}'
+    cmds:
+      - |
+        if [ ! -e "{{.PORT}}" ]; then
+          echo "{{.PORT}} が見つかりません。" >&2
+          echo "WSL2 では Windows 側で 'usbipd attach --wsl --busid <ID>' が必要です。" >&2
+          exit 1
+        fi
+        # TinyGo の USB CDC は 1200bps かつ DTR 断で EnterBootloader() を呼ぶ
+        stty -F "{{.PORT}}" 1200 hupcl
+        echo "BOOTSEL モードへ再起動を要求しました。"
+
   targets:
     desc: TinyGo が対応するターゲット一覧を表示する
     cmds:
