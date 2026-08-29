@@ -16,15 +16,37 @@ const (
 	DefaultBaudRate uint32 = 57600
 	// DefaultTimeout は 1 パケットを受信しきるまでの既定の待ち時間。
 	DefaultTimeout = 1 * time.Second
+	// DefaultFingerPollInterval は指の有無を見に行く既定の間隔。
+	DefaultFingerPollInterval = 100 * time.Millisecond
 )
 
 // 命令コード。
 const (
-	cmdGetImage    byte = 0x01
-	cmdReadSysPara byte = 0x0F
-	cmdVfyPwd      byte = 0x13
-	cmdTemplateNum byte = 0x1D
+	cmdGetImage       byte = 0x01
+	cmdImg2Tz         byte = 0x02
+	cmdSearch         byte = 0x04
+	cmdRegModel       byte = 0x05
+	cmdStore          byte = 0x06
+	cmdDeleteChar     byte = 0x0C
+	cmdEmpty          byte = 0x0D
+	cmdReadSysPara    byte = 0x0F
+	cmdVfyPwd         byte = 0x13
+	cmdTemplateNum    byte = 0x1D
+	cmdReadIndexTable byte = 0x1F
 )
+
+// Buffer はセンサー内の特徴バッファ (CharBuffer1 / CharBuffer2) を指す。
+// 登録では 2 回の読み取りをそれぞれ別のバッファに入れて統合する。
+type Buffer uint8
+
+const (
+	Buffer1 Buffer = 1
+	Buffer2 Buffer = 2
+)
+
+// indexTableLen は ReadIndexTable が 1 回で返すビットマップの長さ。
+// 1 バイト 8 件で 32 バイト = 256 件ぶん。
+const indexTableLen = 32
 
 // pollInterval は受信バッファを覗きに行く間隔。57600bps では 1 バイトが
 // 約 174us なので、これより短くしても取りこぼしは減らない。
@@ -47,6 +69,8 @@ type Device struct {
 	Address uint32
 	// Timeout は応答パケットを 1 つ受信しきるまでの待ち時間。
 	Timeout time.Duration
+	// FingerPollInterval は指が置かれる／離れるのを待つ間の撮像の間隔。
+	FingerPollInterval time.Duration
 
 	tx []byte
 	rx []byte
@@ -56,11 +80,12 @@ type Device struct {
 // Address と Timeout は工場出荷時の設定に合わせた既定値で初期化される。
 func New(port Port) *Device {
 	return &Device{
-		port:    port,
-		Address: DefaultAddress,
-		Timeout: DefaultTimeout,
-		tx:      make([]byte, 0, headerLen+maxPayload+checksumLen),
-		rx:      make([]byte, maxPayload),
+		port:               port,
+		Address:            DefaultAddress,
+		Timeout:            DefaultTimeout,
+		FingerPollInterval: DefaultFingerPollInterval,
+		tx:                 make([]byte, 0, headerLen+maxPayload+checksumLen),
+		rx:                 make([]byte, maxPayload),
 	}
 }
 
@@ -103,6 +128,14 @@ func (d *Device) VerifyPassword(password uint32) error {
 		return err
 	}
 	return status.Err()
+}
+
+// Match は照合で見つかったテンプレート。
+type Match struct {
+	// Page は指紋ライブラリ上の ID。
+	Page uint16
+	// Score は一致スコア。大きいほど確からしい。
+	Score uint16
 }
 
 // SysPara はモジュールのシステムパラメータ。
@@ -171,6 +204,111 @@ func (d *Device) CaptureImage() error {
 		return err
 	}
 	return status.Err()
+}
+
+// ExtractFeature は取り込んだ画像から特徴を抽出し、指定の特徴バッファへ入れる。
+// 画像が不鮮明なら StatusImageTooDry、特徴点が足りなければ StatusImageTooWet を返す。
+func (d *Device) ExtractFeature(buf Buffer) error {
+	status, _, err := d.Command([]byte{cmdImg2Tz, byte(buf)})
+	if err != nil {
+		return err
+	}
+	return status.Err()
+}
+
+// CreateTemplate は 2 つの特徴バッファを統合して 1 件のテンプレートを作り、
+// 両方のバッファに書き戻す。2 回の読み取りが別の指だと StatusMergeFailed を返す。
+func (d *Device) CreateTemplate() error {
+	status, _, err := d.Command([]byte{cmdRegModel})
+	if err != nil {
+		return err
+	}
+	return status.Err()
+}
+
+// StoreTemplate は特徴バッファのテンプレートを指紋ライブラリの page に保存する。
+func (d *Device) StoreTemplate(buf Buffer, page uint16) error {
+	status, _, err := d.Command([]byte{cmdStore, byte(buf), byte(page >> 8), byte(page)})
+	if err != nil {
+		return err
+	}
+	return status.Err()
+}
+
+// Search は特徴バッファを指紋ライブラリの start から count 件と照合する。
+// 該当がなければ StatusNotFound を返す。
+func (d *Device) Search(buf Buffer, start, count uint16) (Match, error) {
+	status, data, err := d.Command([]byte{
+		cmdSearch, byte(buf),
+		byte(start >> 8), byte(start),
+		byte(count >> 8), byte(count),
+	})
+	if err != nil {
+		return Match{}, err
+	}
+	if err := status.Err(); err != nil {
+		return Match{}, err
+	}
+	if len(data) < 4 {
+		return Match{}, ErrBadPacket
+	}
+	return Match{Page: be16(data), Score: be16(data[2:])}, nil
+}
+
+// DeleteTemplate は page から count 件のテンプレートを削除する。
+func (d *Device) DeleteTemplate(page, count uint16) error {
+	status, _, err := d.Command([]byte{
+		cmdDeleteChar,
+		byte(page >> 8), byte(page),
+		byte(count >> 8), byte(count),
+	})
+	if err != nil {
+		return err
+	}
+	return status.Err()
+}
+
+// EmptyLibrary は指紋ライブラリを全消去する。
+func (d *Device) EmptyLibrary() error {
+	status, _, err := d.Command([]byte{cmdEmpty})
+	if err != nil {
+		return err
+	}
+	return status.Err()
+}
+
+// UsedPages は capacity 件までの範囲で使用中のページ ID を昇順に返す。
+// モジュールによっては ReadIndexTable に対応しないため、エラーを無視して
+// TemplateCount で代替できるようにしてある。
+func (d *Device) UsedPages(capacity uint16) ([]uint16, error) {
+	var pages []uint16
+
+	for table := 0; uint16(table)*8*indexTableLen < capacity; table++ {
+		status, data, err := d.Command([]byte{cmdReadIndexTable, byte(table)})
+		if err != nil {
+			return nil, err
+		}
+		if err := status.Err(); err != nil {
+			return nil, err
+		}
+		if len(data) < indexTableLen {
+			return nil, ErrBadPacket
+		}
+
+		for i, b := range data[:indexTableLen] {
+			for bit := range 8 {
+				if b&(1<<bit) == 0 {
+					continue
+				}
+				page := uint16(table*8*indexTableLen + i*8 + bit)
+				if page < capacity {
+					pages = append(pages, page)
+				}
+			}
+		}
+	}
+
+	return pages, nil
 }
 
 // readPacket はヘッダに同期してから 1 パケットを読み、チェックサムを検証する。

@@ -23,6 +23,9 @@ var (
 	led    = machine.LED
 	uart   = machine.UART0
 	sensor = as608.New(uart)
+
+	// capacity は指紋ライブラリの容量。起動時にセンサーから読み出す。
+	capacity uint16
 )
 
 func main() {
@@ -51,6 +54,7 @@ func main() {
 	if err != nil {
 		fail("システムパラメータの読み出しに失敗しました", err)
 	}
+	capacity = para.Capacity
 	println("AS608: システム識別子 =", para.SystemID)
 	println("AS608: テンプレート容量 =", para.Capacity)
 	println("AS608: セキュリティレベル =", para.SecurityLevel)
@@ -63,8 +67,60 @@ func main() {
 	}
 	println("AS608: 登録済みテンプレート =", count)
 
-	// 疎通確認ができたので、指が置かれたら知らせるだけのループに入る。
-	watchFinger()
+	println()
+	printHelp()
+	println()
+
+	run()
+}
+
+// run は指の照合を回しつつ、シリアルからのコマンドを受け付ける。
+func run() {
+	for {
+		if line, ok := readLine(); ok {
+			handleCommand(line)
+			continue
+		}
+		identifyOnce()
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// identifyOnce は指が置かれていれば 1 回照合する。
+func identifyOnce() {
+	m, err := sensor.Identify(capacity)
+
+	switch {
+	case err == nil:
+		led.High()
+		println("一致しました: ID =", m.Page, " スコア =", m.Score)
+		waitForRemoval()
+		led.Low()
+
+	case errors.Is(err, as608.StatusNoFinger):
+		// 指が置かれていない。次の周回で見にいく。
+
+	case errors.Is(err, as608.StatusNotFound):
+		println("登録されていない指です。")
+		waitForRemoval()
+
+	case errors.Is(err, as608.StatusImageTooDry), errors.Is(err, as608.StatusImageTooWet):
+		// 置き方が浅いとよく起きるので、黙って次を待つ。
+		waitForRemoval()
+
+	default:
+		println("照合に失敗しました:", err.Error())
+		waitForRemoval()
+	}
+}
+
+// waitForRemoval は同じ指を続けて拾わないよう、離れるまで待つ。
+// 指が置かれたままなのは異常ではないので、待ちきれなくても黙って戻る。
+func waitForRemoval() {
+	err := sensor.WaitForRemoval(10 * time.Second)
+	if err != nil && !errors.Is(err, as608.ErrFingerTimeout) {
+		println("指の状態を確認できませんでした:", err.Error())
+	}
 }
 
 // waitForHost はホストがシリアルポートを開く（DTR を上げる）まで待つ。
@@ -79,24 +135,6 @@ func waitForHost(timeout time.Duration) {
 	}
 	// 開いた直後は数バイト落ちることがあるので少し置く。
 	time.Sleep(200 * time.Millisecond)
-}
-
-// watchFinger はセンサーを撮像し続け、指が置かれている間 LED を点灯する。
-func watchFinger() {
-	for {
-		err := sensor.CaptureImage()
-		switch {
-		case err == nil:
-			led.High()
-			println("AS608: 指を検出しました")
-		case errors.Is(err, as608.StatusNoFinger):
-			led.Low()
-		default:
-			led.Low()
-			println("AS608: 撮像に失敗しました:", err.Error())
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 }
 
 // fail はエラーを繰り返し報告しながら LED を速く点滅させる。
