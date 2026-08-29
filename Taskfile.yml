@@ -8,6 +8,10 @@ vars:
   BUILD_DIR: build
   CACHE_DIR: .cache
   OUT: '{{.BUILD_DIR | default "build"}}/firmware.uf2'
+  # Windows のロック解除に使う PIN。task build PIN=1234 か、.envrc の
+  # UNLOCK_PIN で渡す。未設定ならキー送出は無効のままビルドされる。
+  PIN: '{{.PIN | default .UNLOCK_PIN | default ""}}'
+  LDFLAGS: '{{if .PIN}}-ldflags="-X main.pinCode={{.PIN}}"{{end}}'
   DOCKER_RUN: >-
     docker run --rm
     --user $(id -u):$(id -g)
@@ -51,7 +55,7 @@ tasks:
       - test -d {{.BUILD_DIR}} && test -d {{.CACHE_DIR}}/go-build && test -d {{.CACHE_DIR}}/gomod
 
   build:
-    desc: UF2 をビルドする
+    desc: UF2 をビルドする（PIN=1234 でロック解除用 PIN を埋め込む）
     deps: [dirs]
     sources:
       - "**/*.go"
@@ -62,9 +66,9 @@ tasks:
     cmds:
       - |
         if [ "{{.BUILDER}}" = "docker" ]; then
-          {{.DOCKER_RUN}} tinygo build -target={{.TARGET}} -o {{.OUT}} ./
+          {{.DOCKER_RUN}} tinygo build -target={{.TARGET}} {{.LDFLAGS}} -o {{.OUT}} ./
         else
-          tinygo build -target={{.TARGET}} -o {{.OUT}} ./
+          tinygo build -target={{.TARGET}} {{.LDFLAGS}} -o {{.OUT}} ./
         fi
       - ls -lh {{.OUT}}
 

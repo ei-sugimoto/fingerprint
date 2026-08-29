@@ -155,6 +155,85 @@ ID と一致スコアが出ます。
 
 一致の厳しさはセンサー側のセキュリティレベル（1〜5、既定 3）で決まります。
 
+### Windows のロック解除 (HID)
+
+PIN を埋め込んでビルドすると、指紋が一致したときに USB キーボードとして
+`Space` → PIN → `Enter` を送ります。`machine/usb/hid/keyboard` を import すると
+CDC と HID の複合デバイスになるため、**シリアルコンソールはそのまま使えます**。
+
+```sh
+task build PIN=1234 --force     # 埋め込んでビルド
+task flash PIN=1234 --force     # 書き込みまで
+```
+
+`.envrc` に書いておくこともできます（`.envrc` は gitignore 済み）。
+
+```sh
+export UNLOCK_PIN=1234
+```
+
+`--force` が要るのは、Task が Go ファイルの変更しか見ておらず、PIN だけを変えても
+再ビルドされないためです。
+
+PIN を渡さずにビルドしたファームウェアはキーを一切送りません。起動時にどちらの
+状態かが出ます。
+
+```
+PIN 送出: 有効（一致したらキーボードとして PIN と Enter を送ります）
+PIN 送出: 無効（ビルド時に PIN が埋め込まれていません）
+```
+
+先頭の `Space` はロック画面からサインイン欄を出すためのものです。送出後は 15 秒の
+クールダウンを置き、ロック解除済みの PC で指を置いてしまったときに PIN を打ち込み
+続けないようにしています。
+
+#### WSL2 では usbipd の切り離しが要る
+
+`usbipd attach` で WSL に渡している間、この HID キーボードは Linux 側につながって
+おり、**Windows にはキーが届きません**。ビルドと登録は WSL 側で行い、実際にロックを
+解除するときは Windows 側へ戻してください。
+
+```powershell
+usbipd detach --busid <ID>
+```
+
+ただし `usbipd attach --auto-attach` を常駐させていると、detach しても即座に WSL へ
+戻されます。**共有そのものを解除するのが確実です。**
+
+```powershell
+usbipd unbind --busid <ID>
+```
+
+書き込みのために WSL 側へ戻すときは bind からやり直します。
+
+```powershell
+usbipd bind --busid <ID>
+usbipd attach --wsl --busid <ID>
+```
+
+Windows 側に戻っているかは、デバイスマネージャーに「USB Composite Device」と
+「HID キーボード デバイス」が出ているかで判断できます。PowerShell なら次のとおりです。
+
+```powershell
+Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like '*VID_2E8A*' } |
+  Select-Object Class,Status,FriendlyName
+```
+
+CDC だけ（`Ports` クラスのみ）が出ている場合は HID が認識されていません。
+
+#### 承知しておくべきこと
+
+1. **PIN はファームウェアに平文で載ります。** `picotool save` でフラッシュを吸い出せば
+   読み取れます（`strings build/firmware.uf2` で確認できます）。RP2350 のセキュアブートと
+   フラッシュ暗号化を使わない限り防げません。**このデバイスを持ち去られることは、
+   PIN を渡すことと同じです。**
+2. 指紋テンプレートはセンサー内の Flash にあります。センサーを別の Pico に繋ぎ替えれば
+   同じ照合ができます。
+3. AS608 は光学式で、Windows Hello 認定リーダーのようななりすまし対策はありません。
+
+利便性のためのガジェットであって、セキュリティを高めるものではありません
+（PIN を物理的に持ち歩くぶん、むしろ下がります）。
+
 ### つながらないときは
 
 | 症状 | 確認するところ |

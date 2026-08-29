@@ -67,6 +67,12 @@ func main() {
 	}
 	println("AS608: 登録済みテンプレート =", count)
 
+	if unlockEnabled() {
+		println("PIN 送出: 有効（一致したらキーボードとして PIN と Enter を送ります）")
+	} else {
+		println("PIN 送出: 無効（ビルド時に PIN が埋め込まれていません）")
+	}
+
 	println()
 	printHelp()
 	println()
@@ -94,6 +100,9 @@ func identifyOnce() {
 	case err == nil:
 		led.High()
 		println("一致しました: ID =", m.Page, " スコア =", m.Score)
+		if sendUnlock() {
+			println("PIN を送出しました。")
+		}
 		waitForRemoval()
 		led.Low()
 

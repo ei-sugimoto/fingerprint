@@ -79,8 +79,15 @@ func (s Status) Error() string {
 	case StatusPasswordRequired:
 		return "as608: password verification required"
 	default:
-		return "as608: unknown confirmation code"
+		// 未定義のコードは原因の切り分けに値そのものが要る。
+		return "as608: unknown confirmation code 0x" + hexByte(byte(s))
 	}
+}
+
+const hexDigits = "0123456789ABCDEF"
+
+func hexByte(b byte) string {
+	return string([]byte{hexDigits[b>>4], hexDigits[b&0x0F]})
 }
 
 // Err は StatusOK なら nil を、それ以外なら Status 自身を error として返す。
